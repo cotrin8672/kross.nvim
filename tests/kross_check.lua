@@ -1,0 +1,59 @@
+vim.opt.runtimepath:append(vim.fn.getcwd())
+
+local kross = require("kross")
+
+kross.setup({ notify = false })
+kross.setup({ notify = false })
+
+assert(vim.fn.exists(":KrossBuild") == 2, "KrossBuild command exists")
+assert(vim.fn.exists(":KrossWatchStart") == 2, "KrossWatchStart command exists")
+assert(vim.fn.exists(":KrossWatchStop") == 2, "KrossWatchStop command exists")
+
+local root = vim.fs.normalize(vim.fn.tempname())
+vim.fn.mkdir(root .. "/build/classes/kotlin/main", "p")
+vim.fn.writefile({ "@echo off" }, root .. "/gradlew.bat")
+
+local requests = {}
+local client = {
+	name = "jdtls",
+	config = { root_dir = root },
+	request = function(_, method, params, callback)
+		table.insert(requests, { method = method, params = params })
+		callback(nil)
+	end,
+}
+
+local original_get_clients = vim.lsp.get_clients
+local original_jobstart = vim.fn.jobstart
+local started
+
+vim.lsp.get_clients = function(opts)
+	if opts and opts.name == "jdtls" then
+		return { client }
+	end
+	return {}
+end
+
+vim.fn.jobstart = function(args, opts)
+	started = { args = args, cwd = opts.cwd }
+	opts.on_exit(1, 0)
+	return 1
+end
+
+kross.build(root)
+
+vim.wait(1000, function()
+	return #requests == 1
+end)
+
+vim.lsp.get_clients = original_get_clients
+vim.fn.jobstart = original_jobstart
+
+assert(started, "build command started")
+assert(started.cwd == root, "build runs in project root")
+assert(started.args[1]:match("gradlew%.bat$"), "build prefers local Gradle wrapper")
+assert(started.args[2] == "classes", "build runs local classes task")
+assert(requests[1].method == "workspace/executeCommand", "build success reattaches Kotlin output")
+assert(requests[1].params.command == "kotlin.java.setKotlinBuildOutput", "attach uses kross JDT LS command")
+assert(requests[1].params.arguments[1] == root .. "/build/classes/kotlin/main", "attach passes Kotlin output")
+

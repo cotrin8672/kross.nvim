@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<plugin>
+  <extension point="org.eclipse.jdt.ls.core.delegateCommandHandler">
+    <delegateCommandHandler class="io.github.cotrin8672.kross.jdtls.SetKotlinBuildOutputCommandHandler">
+      <command id="kotlin.java.setKotlinBuildOutput" static="true" />
+    </delegateCommandHandler>
+  </extension>
+</plugin>
