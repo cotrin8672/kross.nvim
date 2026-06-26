@@ -5,6 +5,18 @@ local kross = require("kross")
 kross.setup({ notify = false })
 kross.setup({ notify = false })
 
+local original_globpath = vim.fn.globpath
+local original_filereadable = vim.fn.filereadable
+vim.fn.globpath = function()
+	return { "fake-kross.jar" }
+end
+vim.fn.filereadable = function(path)
+	return path == "fake-kross.jar" and 1 or 0
+end
+assert(kross.bundles()[1] == "fake-kross.jar", "bundles finds the bundled JDT LS jar")
+vim.fn.globpath = original_globpath
+vim.fn.filereadable = original_filereadable
+
 assert(vim.fn.exists(":KrossBuild") == 2, "KrossBuild command exists")
 assert(vim.fn.exists(":KrossWatchStart") == 2, "KrossWatchStart command exists")
 assert(vim.fn.exists(":KrossWatchStop") == 2, "KrossWatchStop command exists")
@@ -56,4 +68,3 @@ assert(started.args[2] == "classes", "build runs local classes task")
 assert(requests[1].method == "workspace/executeCommand", "build success reattaches Kotlin output")
 assert(requests[1].params.command == "kotlin.java.setKotlinBuildOutput", "attach uses kross JDT LS command")
 assert(requests[1].params.arguments[1] == root .. "/build/classes/kotlin/main", "attach passes Kotlin output")
-

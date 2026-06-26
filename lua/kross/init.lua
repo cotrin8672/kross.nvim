@@ -70,8 +70,18 @@ local function attach_root(root)
 	return false
 end
 
+local function plugin_root()
+	local source = debug.getinfo(1, "S").source:sub(2)
+	return vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(source)))
+end
+
+function M.jar()
+	return vim.fn.globpath(plugin_root(), "build/libs/kross-jdtls-*.jar", false, true)[1]
+end
+
 function M.bundles(jar)
-	if vim.fn.filereadable(jar) == 1 then
+	jar = jar or M.jar()
+	if jar and vim.fn.filereadable(jar) == 1 then
 		return { jar }
 	end
 
