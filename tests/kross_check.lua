@@ -58,9 +58,6 @@ vim.wait(1000, function()
 	return #requests == 1
 end)
 
-vim.lsp.get_clients = original_get_clients
-vim.fn.jobstart = original_jobstart
-
 assert(started, "build command started")
 assert(started.cwd == root, "build runs in project root")
 assert(started.args[1]:match("gradlew%.bat$"), "build prefers local Gradle wrapper")
@@ -68,3 +65,31 @@ assert(started.args[2] == "classes", "build runs local classes task")
 assert(requests[1].method == "workspace/executeCommand", "build success reattaches Kotlin output")
 assert(requests[1].params.command == "kotlin.java.setKotlinBuildOutput", "attach uses kross JDT LS command")
 assert(requests[1].params.arguments[1] == root .. "/build/classes/kotlin/main", "attach passes Kotlin output")
+
+started = nil
+vim.fn.mkdir(root .. "/src/main/kotlin", "p")
+local kotlin_file = root .. "/src/main/kotlin/Foo.kt"
+vim.fn.writefile({ "package demo" }, kotlin_file)
+vim.cmd("edit " .. vim.fn.fnameescape(kotlin_file))
+
+vim.lsp.get_clients = function(opts)
+	if opts and opts.bufnr then
+		return {}
+	end
+	if opts and opts.name == "jdtls" then
+		return { client }
+	end
+	return {}
+end
+
+kross.watch(root)
+vim.api.nvim_exec_autocmds("BufWritePost", { buffer = vim.api.nvim_get_current_buf(), modeline = false })
+vim.wait(1000, function()
+	return started ~= nil
+end)
+
+vim.lsp.get_clients = original_get_clients
+vim.fn.jobstart = original_jobstart
+
+assert(started, "watcher builds Kotlin buffers that are not attached to jdtls")
+assert(started.cwd == root, "unattached Kotlin buffer watcher uses containing jdtls root")

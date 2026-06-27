@@ -51,6 +51,23 @@ local function root_for_buf(bufnr)
 			return client.config.root_dir
 		end
 	end
+
+	local path = vim.api.nvim_buf_get_name(bufnr)
+	if path == "" then
+		return nil
+	end
+
+	path = root_key(path)
+	for _, client in ipairs(vim.lsp.get_clients({ name = "jdtls" })) do
+		local root = client.config and client.config.root_dir
+		if root then
+			root = root_key(root)
+			if path == root or vim.startswith(path, root .. "/") then
+				return root
+			end
+		end
+	end
+
 	return nil
 end
 
