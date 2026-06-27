@@ -301,10 +301,8 @@ function M.attach(client, retry_attempts)
 	if vim.fn.isdirectory(output) ~= 1 then
 		return
 	end
-	if output_attached(root) then
-		return
-	end
 
+	local already_attached = output_attached(root)
 	client:request("workspace/executeCommand", {
 		command = "kotlin.java.setKotlinBuildOutput",
 		arguments = { output },
@@ -314,7 +312,9 @@ function M.attach(client, retry_attempts)
 		end
 	end)
 
-	schedule_attach_retry(client, retry_attempts or 5)
+	if not already_attached then
+		schedule_attach_retry(client, retry_attempts or 5)
+	end
 end
 
 function M.setup(opts)

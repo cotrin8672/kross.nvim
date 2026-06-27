@@ -98,6 +98,21 @@ assert(requests[1].method == "workspace/executeCommand", "build success reattach
 assert(requests[1].params.command == "kotlin.java.setKotlinBuildOutput", "attach uses kross JDT LS command")
 assert(requests[1].params.arguments[1] == root .. "/build/classes/kotlin/main", "attach passes Kotlin output")
 
+requests = {}
+vim.fn.writefile({
+	[[<?xml version="1.0" encoding="UTF-8"?>]],
+	[[<classpath>]],
+	[[	<classpathentry kind="lib" path="]] .. root .. [[/build/classes/kotlin/main">]],
+	[[		<attributes>]],
+	[[			<attribute name="kross" value="true"/>]],
+	[[		</attributes>]],
+	[[	</classpathentry>]],
+	[[</classpath>]],
+}, root .. "/.classpath")
+kross.attach(client)
+assert(#requests == 1, "attach still registers JDT watcher when classpath already contains Kotlin output")
+assert(requests[1].params.command == "kotlin.java.setKotlinBuildOutput", "existing Kotlin output still reaches JDT extension")
+
 started = nil
 vim.fn.mkdir(root .. "/src/main/kotlin", "p")
 local kotlin_file = root .. "/src/main/kotlin/Foo.kt"
