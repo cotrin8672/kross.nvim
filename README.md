@@ -67,7 +67,8 @@ build/classes/kotlin/main
 
 If it exists, kross asks the bundled JDT LS extension to add it to the Java classpath.
 When `src/main/kotlin` exists, the extension attaches it as source so JDT LS
-definitions can jump to the Kotlin source instead of the compiled class.
+can prefer Kotlin source. kross also redirects empty or compiled-output `gd`
+results back to matching Kotlin source declarations.
 Reference lists also hide entries from the managed Kotlin class output.
 
 Commands:
@@ -166,7 +167,8 @@ build/classes/kotlin/main
 
 存在する場合、同梱した JDT LS 拡張に依頼して Java classpath に追加します。
 `src/main/kotlin` が存在する場合は source attachment としても登録するため、
-JDT LS の定義ジャンプはコンパイル済み class ではなく Kotlin ソースへ向かいます。
+Kotlin ソースを優先できます。さらに kross は空またはコンパイル出力を指す `gd`
+結果を、対応する Kotlin ソース宣言へ戻します。
 参照一覧では、kross が管理する Kotlin class output 内の項目を非表示にします。
 
 コマンド:

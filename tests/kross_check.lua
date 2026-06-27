@@ -116,7 +116,7 @@ assert(requests[1].params.command == "kotlin.java.setKotlinBuildOutput", "existi
 started = nil
 vim.fn.mkdir(root .. "/src/main/kotlin", "p")
 local kotlin_file = root .. "/src/main/kotlin/Foo.kt"
-vim.fn.writefile({ "package demo" }, kotlin_file)
+vim.fn.writefile({ "package demo", "class Foo {", "    fun message() = Unit", "}" }, kotlin_file)
 vim.cmd("edit " .. vim.fn.fnameescape(kotlin_file))
 
 vim.lsp.get_clients = function(opts)
@@ -141,6 +141,12 @@ local filtered = kross._filter_reference_items({
 })
 assert(#filtered == 1, "references filter drops compiled Kotlin output")
 assert(filtered[1].filename:match("src/main/kotlin"), "references filter keeps Kotlin source")
+
+local source_location = kross._source_location_for_word("Foo")
+assert(
+	source_location and vim.fs.normalize(vim.uri_to_fname(source_location.uri)) == vim.fs.normalize(kotlin_file),
+	"definition fallback finds Kotlin class source"
+)
 
 vim.lsp.get_clients = original_get_clients
 vim.fn.jobstart = original_jobstart

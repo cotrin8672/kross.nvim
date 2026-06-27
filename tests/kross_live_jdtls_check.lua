@@ -215,20 +215,19 @@ wait_for("Java diagnostics still report KotlinThing as unresolved", 90000, funct
 	return true
 end)
 
-wait_for("JDT LS definition for KotlinThing did not resolve to Kotlin source", 90000, function()
-	local result = client:request_sync("textDocument/definition", {
-		textDocument = { uri = vim.uri_from_bufnr(bufnr) },
-		position = { line = 4, character = 23 },
-	}, 10000, bufnr)
-	if not result or result.err or not result.result then
+local definition_list
+vim.api.nvim_win_set_cursor(0, { 5, 23 })
+vim.lsp.buf.definition({
+	on_list = function(list)
+		definition_list = list
+	end,
+})
+wait_for("kross gd fallback did not resolve KotlinThing to Kotlin source", 90000, function()
+	if not definition_list then
 		return false
 	end
-	local locations = result.result
-	if locations.uri then
-		locations = { locations }
-	end
-	for _, location in ipairs(locations) do
-		if location.uri and vim.uri_to_fname(location.uri):match("KotlinThing%.kt$") then
+	for _, item in ipairs(definition_list.items or {}) do
+		if item.filename and item.filename:match("KotlinThing%.kt$") then
 			return true
 		end
 	end
