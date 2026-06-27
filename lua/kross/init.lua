@@ -13,6 +13,7 @@ local state = {
 	roots = {},
 	timers = {},
 	running = {},
+	attach_retries = {},
 }
 
 local uv = vim.uv or vim.loop
@@ -30,6 +31,14 @@ end
 
 local function output_dir(root)
 	return vim.fs.normalize(root .. "/build/classes/kotlin/main")
+end
+
+local function output_attached(root)
+	local classpath = root_key(root .. "/.classpath")
+	if vim.fn.filereadable(classpath) ~= 1 then
+		return false
+	end
+	return table.concat(vim.fn.readfile(classpath), "\n"):find(output_dir(root), 1, true) ~= nil
 end
 
 local function build_command(root)
@@ -90,6 +99,23 @@ end
 local function plugin_root()
 	local source = debug.getinfo(1, "S").source:sub(2)
 	return vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(source)))
+end
+
+local function schedule_attach_retry(client, attempts)
+	local root = client and client.config and client.config.root_dir
+	if not root or attempts <= 0 then
+		return
+	end
+
+	root = root_key(root)
+	state.attach_retries[root] = (state.attach_retries[root] or 0) + 1
+	local token = state.attach_retries[root]
+	vim.defer_fn(function()
+		if state.attach_retries[root] ~= token then
+			return
+		end
+		M.attach(client, attempts - 1)
+	end, 3000)
 end
 
 function M.jar()
@@ -174,7 +200,7 @@ function M.unwatch(root)
 	end
 end
 
-function M.attach(client)
+function M.attach(client, retry_attempts)
 	if not client or client.name ~= "jdtls" then
 		return
 	end
@@ -196,6 +222,9 @@ function M.attach(client)
 	if vim.fn.isdirectory(output) ~= 1 then
 		return
 	end
+	if output_attached(root) then
+		return
+	end
 
 	client:request("workspace/executeCommand", {
 		command = "kotlin.java.setKotlinBuildOutput",
@@ -205,6 +234,8 @@ function M.attach(client)
 			vim.notify("kross: failed to attach Kotlin output: " .. tostring(err.message or err), vim.log.levels.WARN)
 		end
 	end)
+
+	schedule_attach_retry(client, retry_attempts or 5)
 end
 
 function M.setup(opts)

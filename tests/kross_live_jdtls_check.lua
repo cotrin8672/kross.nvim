@@ -18,6 +18,9 @@ local function wait_for(message, timeout_ms, predicate)
 end
 
 local plugin_root = vim.fn.getcwd()
+local kross = require("kross")
+kross.setup({ notify = false })
+
 local kross_jar = vim.fn.globpath(plugin_root, "build/libs/kross-jdtls-*.jar", false, true)[1]
 assertf(kross_jar and vim.fn.filereadable(kross_jar) == 1, "build the kross JDT LS jar first")
 
@@ -142,19 +145,7 @@ end)
 local before = table.concat(vim.fn.readfile(classpath), "\n")
 assertf(not before:find("build/classes/kotlin/main", 1, true), "kross output was already on the classpath before attach")
 
-local done
-client:request("workspace/executeCommand", {
-	command = "kotlin.java.setKotlinBuildOutput",
-	arguments = { kotlin_output },
-}, function(err)
-	done = err and ("ERROR: " .. tostring(err.message or err)) or "ok"
-end)
-wait_for("kross JDT LS command did not return", 30000, function()
-	return done ~= nil
-end)
-assertf(done == "ok", done)
-
-wait_for("kross output was not written to the JDT classpath", 30000, function()
+wait_for("kross automatic attach did not write Kotlin output to the JDT classpath", 90000, function()
 	if vim.fn.filereadable(classpath) ~= 1 then
 		return false
 	end
