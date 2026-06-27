@@ -136,6 +136,10 @@ assertf(client, "jdtls client not found after start")
 wait_for("jdtls did not initialize", 30000, function()
 	return client.initialized
 end)
+wait_for("kross did not remap gd for the jdtls buffer", 10000, function()
+	local map = vim.fn.maparg("gd", "n", false, true)
+	return map and map.desc == "kross Kotlin definition"
+end)
 
 local classpath = root .. "/.classpath"
 wait_for("jdtls did not import the Gradle Java project", 90000, function()

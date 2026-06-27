@@ -68,6 +68,7 @@ local client = {
 }
 
 local original_get_clients = vim.lsp.get_clients
+local original_get_client_by_id = vim.lsp.get_client_by_id
 local original_jobstart = vim.fn.jobstart
 local started
 
@@ -76,6 +77,9 @@ vim.lsp.get_clients = function(opts)
 		return { client }
 	end
 	return {}
+end
+vim.lsp.get_client_by_id = function()
+	return client
 end
 
 vim.fn.jobstart = function(args, opts)
@@ -148,7 +152,19 @@ assert(
 	"definition fallback finds Kotlin class source"
 )
 
+vim.api.nvim_exec_autocmds("LspAttach", {
+	buffer = vim.api.nvim_get_current_buf(),
+	data = { client_id = 1 },
+	modeline = false,
+})
+vim.wait(1000, function()
+	local map = vim.fn.maparg("gd", "n", false, true)
+	return map and map.desc == "kross Kotlin definition"
+end)
+assert(vim.fn.maparg("gd", "n", false, true).desc == "kross Kotlin definition", "kross remaps gd after jdtls attach")
+
 vim.lsp.get_clients = original_get_clients
+vim.lsp.get_client_by_id = original_get_client_by_id
 vim.fn.jobstart = original_jobstart
 
 assert(started, "watcher builds Kotlin buffers that are not attached to jdtls")

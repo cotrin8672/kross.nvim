@@ -433,6 +433,24 @@ local function patch_references()
 	end
 end
 
+local function map_navigation(bufnr, client)
+	if not client or client.name ~= "jdtls" then
+		return
+	end
+
+	vim.schedule(function()
+		vim.keymap.set("n", "gd", function()
+			return vim.lsp.buf.definition()
+		end, { buffer = bufnr, silent = true, desc = "kross Kotlin definition" })
+		vim.keymap.set("n", "gr", function()
+			return vim.lsp.buf.references()
+		end, { buffer = bufnr, silent = true, desc = "kross Kotlin references" })
+		vim.keymap.set("n", "grr", function()
+			return vim.lsp.buf.references()
+		end, { buffer = bufnr, silent = true, desc = "kross Kotlin references" })
+	end)
+end
+
 function M.jar()
 	local root = plugin_root()
 	local jar = plugin_jar(root)
@@ -572,6 +590,7 @@ function M.setup(opts)
 		callback = function(args)
 			local client = vim.lsp.get_client_by_id(args.data.client_id)
 			M.attach(client)
+			map_navigation(args.buf, client)
 		end,
 	})
 
