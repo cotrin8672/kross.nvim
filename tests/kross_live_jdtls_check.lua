@@ -152,6 +152,33 @@ wait_for("kross automatic attach did not write Kotlin output to the JDT classpat
 	return table.concat(vim.fn.readfile(classpath), "\n"):find("build/classes/kotlin/main", 1, true) ~= nil
 end)
 
+do
+	local lines = vim.fn.readfile(classpath)
+	local without_kross = {}
+	local skipping = false
+	for _, line in ipairs(lines) do
+		if line:find("build/classes/kotlin/main", 1, true) then
+			skipping = true
+		end
+		if not skipping then
+			table.insert(without_kross, line)
+		end
+		if skipping and line:find("</classpathentry>", 1, true) then
+			skipping = false
+		end
+	end
+	vim.fn.writefile(without_kross, classpath)
+	assertf(not table.concat(vim.fn.readfile(classpath), "\n"):find("build/classes/kotlin/main", 1, true), "test failed to remove kross classpath entry")
+	vim.fn.writefile({ "touch" }, kotlin_output .. "/demo/KrossWatcherTouch.txt")
+end
+
+wait_for("kross JDT watcher did not restore Kotlin output after classpath changed", 90000, function()
+	if vim.fn.filereadable(classpath) ~= 1 then
+		return false
+	end
+	return table.concat(vim.fn.readfile(classpath), "\n"):find("build/classes/kotlin/main", 1, true) ~= nil
+end)
+
 vim.cmd("edit " .. vim.fn.fnameescape(root .. "/src/main/java/demo/UseKotlin.java"))
 vim.cmd("write")
 bufnr = vim.api.nvim_get_current_buf()
