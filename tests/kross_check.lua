@@ -13,9 +13,41 @@ end
 vim.fn.filereadable = function(path)
 	return path == "fake-kross.jar" and 1 or 0
 end
-assert(kross.bundles()[1] == "fake-kross.jar", "bundles finds the bundled JDT LS jar")
+assert(kross.bundles("fake-kross.jar")[1] == "fake-kross.jar", "bundles accepts an explicit JDT LS jar")
 vim.fn.globpath = original_globpath
 vim.fn.filereadable = original_filereadable
+
+local original_getftime = vim.fn.getftime
+local original_system = vim.system
+local plugin_build
+vim.fn.globpath = function(_, pattern)
+	if pattern == "build/libs/kross-jdtls-*.jar" then
+		return { "stale-kross.jar" }
+	end
+	return { "src/main/java/Kross.java" }
+end
+vim.fn.filereadable = function(path)
+	return path == "stale-kross.jar" and 1 or 0
+end
+vim.fn.getftime = function(path)
+	return path == "stale-kross.jar" and 10 or 20
+end
+vim.system = function(args, opts)
+	plugin_build = { args = args, cwd = opts.cwd }
+	return {
+		wait = function()
+			return { code = 0, stdout = "", stderr = "" }
+		end,
+	}
+end
+assert(kross.bundles()[1] == "stale-kross.jar", "bundles returns the bundled JDT LS jar")
+assert(plugin_build, "stale bundled jar triggers plugin build")
+assert(plugin_build.args[#plugin_build.args - 1] == "jar", "plugin build runs jar task")
+assert(plugin_build.args[#plugin_build.args] == "--no-daemon", "plugin build disables Gradle daemon")
+vim.fn.globpath = original_globpath
+vim.fn.filereadable = original_filereadable
+vim.fn.getftime = original_getftime
+vim.system = original_system
 
 assert(vim.fn.exists(":KrossBuild") == 2, "KrossBuild command exists")
 assert(vim.fn.exists(":KrossWatchStart") == 2, "KrossWatchStart command exists")

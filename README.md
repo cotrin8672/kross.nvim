@@ -50,6 +50,11 @@ require("jdtls").start_or_attach({
 })
 ```
 
+`kross.bundles()` checks the bundled extension jar before returning it. If the jar
+is missing or older than the plugin Java/Gradle sources, kross runs
+`gradle jar --no-daemon` from the plugin directory first. This prevents `jdtls`
+from loading a stale extension jar after a plugin update.
+
 ## Usage
 
 `require("kross").setup()` registers the integration.
@@ -83,9 +88,12 @@ require("kross").setup({
   watch = true,
   build_on_attach = false,
   build_args = { "classes" },
+  plugin_auto_build = true,
+  plugin_build_args = { "jar", "--no-daemon" },
   debounce_ms = 300,
   notify = true,
   -- build_command = "gradle",
+  -- plugin_build_command = "gradle",
 })
 ```
 

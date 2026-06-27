@@ -4,6 +4,8 @@ local defaults = {
 	watch = true,
 	build_on_attach = false,
 	build_args = { "classes" },
+	plugin_auto_build = true,
+	plugin_build_args = { "jar", "--no-daemon" },
 	debounce_ms = 300,
 	notify = true,
 }
@@ -101,6 +103,75 @@ local function plugin_root()
 	return vim.fs.dirname(vim.fs.dirname(vim.fs.dirname(source)))
 end
 
+local function plugin_build_command(root)
+	if state.config.plugin_build_command then
+		return state.config.plugin_build_command
+	end
+
+	local wrapper = root .. (vim.fn.has("win32") == 1 and "/gradlew.bat" or "/gradlew")
+	if vim.fn.filereadable(wrapper) == 1 then
+		return wrapper
+	end
+
+	return "gradle"
+end
+
+local function plugin_jar(root)
+	return vim.fn.globpath(root, "build/libs/kross-jdtls-*.jar", false, true)[1]
+end
+
+local function latest_plugin_source_mtime(root)
+	local latest = 0
+	for _, pattern in ipairs({ "src/main/**/*", "build.gradle*", "settings.gradle*", "gradle.properties" }) do
+		for _, path in ipairs(vim.fn.globpath(root, pattern, false, true)) do
+			latest = math.max(latest, vim.fn.getftime(path))
+		end
+	end
+	return latest
+end
+
+local function plugin_jar_stale(root, jar)
+	if not jar or vim.fn.filereadable(jar) ~= 1 then
+		return true
+	end
+
+	local jar_mtime = vim.fn.getftime(jar)
+	return jar_mtime <= 0 or latest_plugin_source_mtime(root) > jar_mtime
+end
+
+local function plugin_build_args(root)
+	local command = plugin_build_command(root)
+	local args = type(command) == "table" and vim.deepcopy(command) or { command }
+	return vim.list_extend(args, state.config.plugin_build_args or {})
+end
+
+local function build_plugin_jar(root)
+	local args = plugin_build_args(root)
+	notify("kross: building JDT LS bundle")
+
+	local result
+	if vim.system then
+		result = vim.system(args, { cwd = root, text = true }):wait()
+	else
+		local cwd = uv.cwd()
+		uv.chdir(root)
+		local output = vim.fn.system(args)
+		result = { code = vim.v.shell_error, stdout = output, stderr = "" }
+		uv.chdir(cwd)
+	end
+
+	if result.code == 0 then
+		return true
+	end
+
+	local output = vim.trim(table.concat({ result.stderr or "", result.stdout or "" }, "\n"))
+	if output ~= "" then
+		output = "\n" .. output
+	end
+	vim.notify("kross: failed to build JDT LS bundle with exit code " .. result.code .. output, vim.log.levels.ERROR)
+	return false
+end
+
 local function schedule_attach_retry(client, attempts)
 	local root = client and client.config and client.config.root_dir
 	if not root or attempts <= 0 then
@@ -119,11 +190,19 @@ local function schedule_attach_retry(client, attempts)
 end
 
 function M.jar()
-	return vim.fn.globpath(plugin_root(), "build/libs/kross-jdtls-*.jar", false, true)[1]
+	local root = plugin_root()
+	local jar = plugin_jar(root)
+	if state.config.plugin_auto_build ~= false and plugin_jar_stale(root, jar) and not build_plugin_jar(root) then
+		return nil
+	end
+
+	return plugin_jar(root)
 end
 
 function M.bundles(jar)
-	jar = jar or M.jar()
+	if not jar then
+		jar = M.jar()
+	end
 	if jar and vim.fn.filereadable(jar) == 1 then
 		return { jar }
 	end
