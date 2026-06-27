@@ -16,6 +16,7 @@ local state = {
 	timers = {},
 	running = {},
 	attach_retries = {},
+	original_references = nil,
 }
 
 local uv = vim.uv or vim.loop
@@ -33,6 +34,43 @@ end
 
 local function output_dir(root)
 	return vim.fs.normalize(root .. "/build/classes/kotlin/main")
+end
+
+local function managed_roots()
+	local roots = vim.deepcopy(state.roots)
+	for _, client in ipairs(vim.lsp.get_clients({ name = "jdtls" })) do
+		local root = client.config and client.config.root_dir
+		if root then
+			roots[root_key(root)] = true
+		end
+	end
+	return roots
+end
+
+local function generated_kotlin_output(path)
+	if type(path) ~= "string" then
+		return false
+	end
+
+	local normalized = root_key(path:gsub("\\", "/"))
+	for root in pairs(managed_roots()) do
+		local output = output_dir(root)
+		if normalized == output or vim.startswith(normalized, output .. "/") then
+			return true
+		end
+	end
+
+	return normalized:find("build/classes/kotlin/main/", 1, true) ~= nil
+end
+
+function M._filter_reference_items(items)
+	local filtered = {}
+	for _, item in ipairs(items or {}) do
+		if not generated_kotlin_output(item.filename or item.uri or item.text) then
+			table.insert(filtered, item)
+		end
+	end
+	return filtered
 end
 
 local function output_attached(root)
@@ -189,6 +227,41 @@ local function schedule_attach_retry(client, attempts)
 	end, 3000)
 end
 
+local function show_reference_list(list, opts)
+	if opts.on_list then
+		opts.on_list(list)
+	elseif opts.loclist then
+		vim.fn.setloclist(0, {}, " ", list)
+		vim.cmd.lopen()
+	else
+		vim.fn.setqflist({}, " ", list)
+		vim.cmd("botright copen")
+	end
+end
+
+local function patch_references()
+	if state.original_references then
+		return
+	end
+
+	state.original_references = vim.lsp.buf.references
+	vim.lsp.buf.references = function(context, opts)
+		opts = opts or {}
+		local original_on_list = opts.on_list
+		local wrapped_opts = vim.tbl_extend("force", opts, {
+			on_list = function(list)
+				list.items = M._filter_reference_items(list.items)
+				if not next(list.items) then
+					vim.notify("No references found")
+					return
+				end
+				show_reference_list(list, vim.tbl_extend("force", opts, { on_list = original_on_list }))
+			end,
+		})
+		state.original_references(context, wrapped_opts)
+	end
+end
+
 function M.jar()
 	local root = plugin_root()
 	local jar = plugin_jar(root)
@@ -319,6 +392,7 @@ end
 
 function M.setup(opts)
 	state.config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
+	patch_references()
 
 	vim.api.nvim_clear_autocmds({ group = group })
 	vim.api.nvim_create_autocmd("LspAttach", {

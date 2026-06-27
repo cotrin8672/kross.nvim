@@ -91,9 +91,10 @@ public final class SetKotlinBuildOutputCommandHandler implements IDelegateComman
         }
 
         IPath krossPath = org.eclipse.core.runtime.Path.fromOSString(outputPath.toString());
+        IPath sourcePath = sourcePathForOutput(project, outputPath);
         IClasspathEntry outputEntry = JavaCore.newLibraryEntry(
                 krossPath,
-                null,
+                sourcePath,
                 null,
                 null,
                 new IClasspathAttribute[] { JavaCore.newClasspathAttribute(MARKER, "true") },
@@ -107,6 +108,16 @@ public final class SetKotlinBuildOutputCommandHandler implements IDelegateComman
         entries.add(outputEntry);
         javaProject.setRawClasspath(entries.toArray(IClasspathEntry[]::new), monitor);
         buildSupport.refresh(project, CHANGE_TYPE.CHANGED, monitor);
+    }
+
+    private static IPath sourcePathForOutput(IProject project, Path outputPath) {
+        Path projectPath = project.getLocation().toFile().toPath().toAbsolutePath().normalize();
+        // ponytail: single source dir is the Gradle JVM MVP; infer source sets if multi-source projects need it.
+        Path sourcePath = projectPath.resolve("src/main/kotlin").normalize();
+        if (!outputPath.startsWith(projectPath) || !Files.isDirectory(sourcePath)) {
+            return null;
+        }
+        return org.eclipse.core.runtime.Path.fromOSString(sourcePath.toString());
     }
 
     private static synchronized void registerWatcher(Path outputPath) {

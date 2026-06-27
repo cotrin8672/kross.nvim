@@ -149,7 +149,9 @@ wait_for("kross automatic attach did not write Kotlin output to the JDT classpat
 	if vim.fn.filereadable(classpath) ~= 1 then
 		return false
 	end
-	return table.concat(vim.fn.readfile(classpath), "\n"):find("build/classes/kotlin/main", 1, true) ~= nil
+	local text = table.concat(vim.fn.readfile(classpath), "\n")
+	return text:find("build/classes/kotlin/main", 1, true) ~= nil
+		and text:find("src/main/kotlin", 1, true) ~= nil
 end)
 
 do
@@ -176,7 +178,9 @@ wait_for("kross JDT watcher did not restore Kotlin output after classpath change
 	if vim.fn.filereadable(classpath) ~= 1 then
 		return false
 	end
-	return table.concat(vim.fn.readfile(classpath), "\n"):find("build/classes/kotlin/main", 1, true) ~= nil
+	local text = table.concat(vim.fn.readfile(classpath), "\n")
+	return text:find("build/classes/kotlin/main", 1, true) ~= nil
+		and text:find("src/main/kotlin", 1, true) ~= nil
 end)
 
 vim.cmd("edit " .. vim.fn.fnameescape(root .. "/src/main/java/demo/UseKotlin.java"))
@@ -209,6 +213,26 @@ wait_for("Java diagnostics still report KotlinThing as unresolved", 90000, funct
 		end
 	end
 	return true
+end)
+
+wait_for("JDT LS definition for KotlinThing did not resolve to Kotlin source", 90000, function()
+	local result = client:request_sync("textDocument/definition", {
+		textDocument = { uri = vim.uri_from_bufnr(bufnr) },
+		position = { line = 4, character = 23 },
+	}, 10000, bufnr)
+	if not result or result.err or not result.result then
+		return false
+	end
+	local locations = result.result
+	if locations.uri then
+		locations = { locations }
+	end
+	for _, location in ipairs(locations) do
+		if location.uri and vim.uri_to_fname(location.uri):match("KotlinThing%.kt$") then
+			return true
+		end
+	end
+	return false
 end)
 
 client:stop(true)

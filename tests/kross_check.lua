@@ -135,6 +135,13 @@ vim.wait(1000, function()
 	return started ~= nil
 end)
 
+local filtered = kross._filter_reference_items({
+	{ filename = root .. "/build/classes/kotlin/main/demo/Foo.class" },
+	{ filename = root .. "/src/main/kotlin/demo/Foo.kt" },
+})
+assert(#filtered == 1, "references filter drops compiled Kotlin output")
+assert(filtered[1].filename:match("src/main/kotlin"), "references filter keeps Kotlin source")
+
 vim.lsp.get_clients = original_get_clients
 vim.fn.jobstart = original_jobstart
 
