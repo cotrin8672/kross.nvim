@@ -148,12 +148,10 @@ require("jdtls").start_or_attach({
   cmd = { "jdtls" },
   root_dir = vim.fs.root(0, { "settings.gradle", "settings.gradle.kts", "build.gradle", "build.gradle.kts", ".git" }),
   init_options = {
-    bundles = kross.bundles(vim.fn.stdpath("data") .. "/lazy/kross.nvim/build/libs/kross-jdtls-0.2.0.jar"),
+    bundles = kross.bundles(),
   },
 })
 ```
-
-プラグインマネージャーのインストール先が違う場合は、jar のパスを変更してください。
 
 ## 使い方
 

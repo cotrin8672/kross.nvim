@@ -4,6 +4,7 @@
   <extension point="org.eclipse.jdt.ls.core.delegateCommandHandler">
     <delegateCommandHandler class="io.github.cotrin8672.kross.jdtls.SetKotlinBuildOutputCommandHandler">
       <command id="kotlin.java.setKotlinBuildOutput" static="true" />
+      <command id="kotlin.java.resolveKotlinSource" static="true" />
     </delegateCommandHandler>
   </extension>
 </plugin>

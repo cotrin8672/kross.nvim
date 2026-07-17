@@ -16,8 +16,6 @@ local state = {
 	timers = {},
 	running = {},
 	attach_retries = {},
-	original_references = nil,
-	original_definition = nil,
 }
 
 local uv = vim.uv or vim.loop
@@ -35,130 +33,6 @@ end
 
 local function output_dir(root)
 	return vim.fs.normalize(root .. "/build/classes/kotlin/main")
-end
-
-local function managed_roots()
-	local roots = vim.deepcopy(state.roots)
-	for _, client in ipairs(vim.lsp.get_clients({ name = "jdtls" })) do
-		local root = client.config and client.config.root_dir
-		if root then
-			roots[root_key(root)] = true
-		end
-	end
-	return roots
-end
-
-local function generated_kotlin_output(path)
-	if type(path) ~= "string" then
-		return false
-	end
-
-	local normalized = root_key(path:gsub("\\", "/"))
-	for root in pairs(managed_roots()) do
-		local output = output_dir(root)
-		if normalized == output or vim.startswith(normalized, output .. "/") then
-			return true
-		end
-	end
-
-	return normalized:find("build/classes/kotlin/main/", 1, true) ~= nil
-end
-
-local function lua_pattern_escape(text)
-	return (text:gsub("([^%w])", "%%%1"))
-end
-
-local function location_path(location)
-	local uri = location and (location.uri or location.targetUri)
-	if type(uri) ~= "string" then
-		return nil
-	end
-	local ok, path = pcall(vim.uri_to_fname, uri)
-	return ok and path or uri
-end
-
-local function source_candidate_for_output(path)
-	if type(path) ~= "string" then
-		return nil
-	end
-
-	local normalized = root_key(path:gsub("\\", "/"))
-	for root in pairs(managed_roots()) do
-		local output = output_dir(root)
-		if normalized:sub(1, #output + 1) == output .. "/" then
-			local relative = normalized:sub(#output + 2):gsub("%.class$", ".kt"):gsub("%$.*%.kt$", ".kt")
-			local source = root_key(root .. "/src/main/kotlin/" .. relative)
-			if vim.fn.filereadable(source) == 1 then
-				return source
-			end
-		end
-	end
-
-	return nil
-end
-
-local function source_location(path, line, character)
-	return {
-		uri = vim.uri_from_fname(path),
-		range = {
-			start = { line = line, character = character },
-			["end"] = { line = line, character = character },
-		},
-	}
-end
-
-local function source_location_for_word(word)
-	if type(word) ~= "string" or word == "" then
-		return nil
-	end
-
-	local escaped = lua_pattern_escape(word)
-	for root in pairs(managed_roots()) do
-		local kotlin_root = root .. "/src/main/kotlin"
-		local files = vim.fs.find(function(name)
-			return name:match("%.kt$")
-		end, { path = kotlin_root, type = "file", limit = math.huge })
-		for _, path in ipairs(files) do
-			for index, line in ipairs(vim.fn.readfile(path)) do
-				-- ponytail: text scan is enough for direct class/member fallback; use Kotlin parser if overloads need disambiguation.
-				if
-					line:find("class%s+" .. escaped .. "[^%w_]")
-					or line:find("interface%s+" .. escaped .. "[^%w_]")
-					or line:find("object%s+" .. escaped .. "[^%w_]")
-					or line:find("fun%s+" .. escaped .. "[^%w_]")
-					or line:find("val%s+" .. escaped .. "[^%w_]")
-					or line:find("var%s+" .. escaped .. "[^%w_]")
-				then
-					local start = line:find(escaped, 1, false) or 1
-					return source_location(path, index - 1, start - 1)
-				end
-			end
-		end
-	end
-
-	return nil
-end
-
-local function source_location_for_output(location)
-	local source = source_candidate_for_output(location_path(location))
-	if not source then
-		return nil
-	end
-	return source_location(source, 0, 0)
-end
-
-function M._filter_reference_items(items)
-	local filtered = {}
-	for _, item in ipairs(items or {}) do
-		if not generated_kotlin_output(item.filename or item.uri or item.text) then
-			table.insert(filtered, item)
-		end
-	end
-	return filtered
-end
-
-function M._source_location_for_word(word)
-	return source_location_for_word(word)
 end
 
 local function output_attached(root)
@@ -243,7 +117,12 @@ local function plugin_build_command(root)
 end
 
 local function plugin_jar(root)
-	return vim.fn.globpath(root, "build/libs/kross-jdtls-*.jar", false, true)[1]
+	local jars = vim.fn.globpath(root, "build/libs/kross-jdtls-*.jar", false, true)
+	table.sort(jars, function(a, b)
+		local a_mtime, b_mtime = vim.fn.getftime(a), vim.fn.getftime(b)
+		return a_mtime == b_mtime and a > b or a_mtime > b_mtime
+	end)
+	return jars[1]
 end
 
 local function latest_plugin_source_mtime(root)
@@ -315,18 +194,6 @@ local function schedule_attach_retry(client, attempts)
 	end, 3000)
 end
 
-local function show_reference_list(list, opts)
-	if opts.on_list then
-		opts.on_list(list)
-	elseif opts.loclist then
-		vim.fn.setloclist(0, {}, " ", list)
-		vim.cmd.lopen()
-	else
-		vim.fn.setqflist({}, " ", list)
-		vim.cmd("botright copen")
-	end
-end
-
 local function show_locations(locations, client, opts)
 	opts = opts or {}
 	if opts.on_list then
@@ -367,70 +234,50 @@ local function definition_locations(result)
 	return vim.islist(result) and result or {}
 end
 
-local function patch_definition()
-	if state.original_definition then
-		return
+function M.definition(opts)
+	opts = opts or {}
+	local bufnr = vim.api.nvim_get_current_buf()
+	local win = vim.api.nvim_get_current_win()
+	local clients = vim.lsp.get_clients({ bufnr = bufnr, name = "jdtls", method = "textDocument/definition" })
+	if not next(clients) then
+		return vim.lsp.buf.definition(opts)
 	end
 
-	state.original_definition = vim.lsp.buf.definition
-	vim.lsp.buf.definition = function(opts)
-		opts = opts or {}
-		local bufnr = vim.api.nvim_get_current_buf()
-		local win = vim.api.nvim_get_current_win()
-		local clients = vim.lsp.get_clients({ bufnr = bufnr, name = "jdtls", method = "textDocument/definition" })
-		if not next(clients) then
-			return state.original_definition(opts)
-		end
-
-		local word = vim.fn.expand("<cword>")
+	local first_client = clients[1]
+	local position_params = vim.lsp.util.make_position_params(win, first_client.offset_encoding)
+	local function standard_definition()
 		vim.lsp.buf_request_all(bufnr, "textDocument/definition", function(client)
 			return vim.lsp.util.make_position_params(win, client.offset_encoding)
 		end, function(results)
 			local locations = {}
-			local first_client = clients[1]
+			local response_client = first_client
 			for client_id, response in pairs(results) do
-				first_client = vim.lsp.get_client_by_id(client_id) or first_client
-				for _, location in ipairs(definition_locations(response and response.result)) do
-					local source = source_location_for_output(location)
-					table.insert(locations, source or location)
-				end
-			end
-			if not next(locations) then
-				local source = source_location_for_word(word)
-				if source then
-					locations = { source }
-				end
+				response_client = vim.lsp.get_client_by_id(client_id) or response_client
+				vim.list_extend(locations, definition_locations(response and response.result))
 			end
 			if not next(locations) then
 				vim.notify("No locations found", vim.log.levels.INFO)
 				return
 			end
-			show_locations(locations, first_client, opts)
+			show_locations(locations, response_client, opts)
 		end)
 	end
-end
 
-local function patch_references()
-	if state.original_references then
-		return
-	end
-
-	state.original_references = vim.lsp.buf.references
-	vim.lsp.buf.references = function(context, opts)
-		opts = opts or {}
-		local original_on_list = opts.on_list
-		local wrapped_opts = vim.tbl_extend("force", opts, {
-			on_list = function(list)
-				list.items = M._filter_reference_items(list.items)
-				if not next(list.items) then
-					vim.notify("No references found")
-					return
-				end
-				show_reference_list(list, vim.tbl_extend("force", opts, { on_list = original_on_list }))
-			end,
-		})
-		state.original_references(context, wrapped_opts)
-	end
+	first_client:request("workspace/executeCommand", {
+		command = "kotlin.java.resolveKotlinSource",
+		arguments = {
+			{
+				textDocumentUri = position_params.textDocument.uri,
+				position = position_params.position,
+			},
+		},
+	}, function(err, location)
+		if err or not location then
+			standard_definition()
+			return
+		end
+		show_locations({ location }, first_client, opts)
+	end, bufnr)
 end
 
 local function map_navigation(bufnr, client)
@@ -440,7 +287,7 @@ local function map_navigation(bufnr, client)
 
 	vim.schedule(function()
 		vim.keymap.set("n", "gd", function()
-			return vim.lsp.buf.definition()
+			return M.definition()
 		end, { buffer = bufnr, silent = true, desc = "kross Kotlin definition" })
 		vim.keymap.set("n", "gr", function()
 			return vim.lsp.buf.references()
@@ -581,8 +428,6 @@ end
 
 function M.setup(opts)
 	state.config = vim.tbl_deep_extend("force", vim.deepcopy(defaults), opts or {})
-	patch_definition()
-	patch_references()
 
 	vim.api.nvim_clear_autocmds({ group = group })
 	vim.api.nvim_create_autocmd("LspAttach", {

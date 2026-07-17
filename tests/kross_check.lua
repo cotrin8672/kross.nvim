@@ -22,6 +22,20 @@ local original_system = vim.system
 local plugin_build
 vim.fn.globpath = function(_, pattern)
 	if pattern == "build/libs/kross-jdtls-*.jar" then
+		return { "old-kross.jar", "new-kross.jar" }
+	end
+	return { "src/main/java/Kross.java" }
+end
+vim.fn.filereadable = function(path)
+	return (path == "old-kross.jar" or path == "new-kross.jar") and 1 or 0
+end
+vim.fn.getftime = function(path)
+	return ({ ["old-kross.jar"] = 10, ["new-kross.jar"] = 30 })[path] or 20
+end
+assert(kross.bundles()[1] == "new-kross.jar", "bundles returns the newest built JDT LS jar")
+
+vim.fn.globpath = function(_, pattern)
+	if pattern == "build/libs/kross-jdtls-*.jar" then
 		return { "stale-kross.jar" }
 	end
 	return { "src/main/java/Kross.java" }
@@ -60,6 +74,7 @@ vim.fn.writefile({ "@echo off" }, root .. "/gradlew.bat")
 local requests = {}
 local client = {
 	name = "jdtls",
+	offset_encoding = "utf-16",
 	config = { root_dir = root },
 	request = function(_, method, params, callback)
 		table.insert(requests, { method = method, params = params })
@@ -139,19 +154,6 @@ vim.wait(1000, function()
 	return started ~= nil
 end)
 
-local filtered = kross._filter_reference_items({
-	{ filename = root .. "/build/classes/kotlin/main/demo/Foo.class" },
-	{ filename = root .. "/src/main/kotlin/demo/Foo.kt" },
-})
-assert(#filtered == 1, "references filter drops compiled Kotlin output")
-assert(filtered[1].filename:match("src/main/kotlin"), "references filter keeps Kotlin source")
-
-local source_location = kross._source_location_for_word("Foo")
-assert(
-	source_location and vim.fs.normalize(vim.uri_to_fname(source_location.uri)) == vim.fs.normalize(kotlin_file),
-	"definition fallback finds Kotlin class source"
-)
-
 vim.api.nvim_exec_autocmds("LspAttach", {
 	buffer = vim.api.nvim_get_current_buf(),
 	data = { client_id = 1 },
@@ -162,6 +164,68 @@ vim.wait(1000, function()
 	return map and map.desc == "kross Kotlin definition"
 end)
 assert(vim.fn.maparg("gd", "n", false, true).desc == "kross Kotlin definition", "kross remaps gd after jdtls attach")
+
+local original_buf_request_all = vim.lsp.buf_request_all
+local definition_list
+local resolve_request
+local standard_requested = false
+vim.lsp.get_clients = function(opts)
+	if opts and opts.name == "jdtls" then
+		return { client }
+	end
+	return {}
+end
+vim.lsp.buf_request_all = function(_, method, _, callback)
+	standard_requested = true
+	assert(method == "textDocument/definition", "kross falls back to the standard JDT LS definition")
+	callback({
+		[1] = {
+			result = {
+				uri = vim.uri_from_fname(kotlin_file),
+				range = { start = { line = 1, character = 6 }, ["end"] = { line = 1, character = 9 } },
+			},
+		},
+	})
+end
+client.request = function(_, method, params, callback)
+	resolve_request = { method = method, params = params }
+	callback(nil, {
+		uri = vim.uri_from_fname(kotlin_file),
+		range = {
+			start = { line = 1, character = 6 },
+			["end"] = { line = 1, character = 9 },
+		},
+	})
+end
+vim.api.nvim_win_set_cursor(0, { 2, 7 })
+kross.definition({
+	on_list = function(list)
+		definition_list = list
+	end,
+})
+vim.wait(1000, function()
+	return definition_list ~= nil
+end)
+assert(resolve_request.method == "workspace/executeCommand", "kross asks the JDT LS extension for Kotlin source")
+assert(resolve_request.params.command == "kotlin.java.resolveKotlinSource", "kross uses the Kotlin source command")
+assert(resolve_request.params.arguments[1].position.line == 1, "source lookup passes the cursor position")
+assert(not standard_requested, "resolved Kotlin source bypasses the binary definition")
+assert(vim.fs.normalize(definition_list.items[1].filename) == vim.fs.normalize(kotlin_file), "kross opens the source returned by the extension")
+
+definition_list = nil
+client.request = function(_, _, _, callback)
+	callback(nil, nil)
+end
+kross.definition({
+	on_list = function(list)
+		definition_list = list
+	end,
+})
+vim.wait(1000, function()
+	return definition_list ~= nil
+end)
+assert(standard_requested, "missing Kotlin source falls back to the standard definition")
+vim.lsp.buf_request_all = original_buf_request_all
 
 vim.lsp.get_clients = original_get_clients
 vim.lsp.get_client_by_id = original_get_client_by_id

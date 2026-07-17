@@ -3,7 +3,7 @@ plugins {
 }
 
 group = "io.github.cotrin8672.kross"
-version = "0.2.0"
+version = "0.2.2"
 
 java {
     toolchain {

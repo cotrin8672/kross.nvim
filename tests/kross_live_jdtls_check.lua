@@ -21,7 +21,7 @@ local plugin_root = vim.fn.getcwd()
 local kross = require("kross")
 kross.setup({ notify = false })
 
-local kross_jar = vim.fn.globpath(plugin_root, "build/libs/kross-jdtls-*.jar", false, true)[1]
+local kross_jar = kross.bundles()[1]
 assertf(kross_jar and vim.fn.filereadable(kross_jar) == 1, "build the kross JDT LS jar first")
 
 local mason_jdtls = vim.fs.joinpath(vim.env.LOCALAPPDATA, "nvim-data", "mason", "packages", "jdtls")
@@ -57,12 +57,21 @@ write(root .. "/src/main/kotlin/demo/KotlinThing.kt", {
 	'    fun message(): String = "ok"',
 	"}",
 })
+write(root .. "/src/main/kotlin/demo/Functions.kt", {
+	"package demo",
+	"",
+	'fun topLevelMessage(): String = "top"',
+})
 write(root .. "/src/main/java/demo/UseKotlin.java", {
 	"package demo;",
 	"",
 	"public class UseKotlin {",
 	"    public String call() {",
 	"        return new KotlinThing().message();",
+	"    }",
+	"",
+	"    public String topLevelCall() {",
+	"        return FunctionsKt.topLevelMessage();",
 	"    }",
 	"}",
 })
@@ -220,13 +229,53 @@ wait_for("Java diagnostics still report KotlinThing as unresolved", 90000, funct
 end)
 
 local definition_list
-vim.api.nvim_win_set_cursor(0, { 5, 23 })
-vim.lsp.buf.definition({
+vim.api.nvim_win_set_cursor(0, { 5, 35 })
+local source_result = client:request_sync("workspace/executeCommand", {
+	command = "kotlin.java.resolveKotlinSource",
+	arguments = {
+		{
+			textDocumentUri = vim.uri_from_bufnr(bufnr),
+			position = { line = 4, character = 35 },
+		},
+	},
+}, 10000, bufnr)
+assertf(
+	source_result and not source_result.err and source_result.result,
+	"kross JDT extension did not resolve Kotlin source: " .. vim.inspect(source_result)
+)
+assertf(
+	tostring(source_result.result.uri):match("KotlinThing%.kt$"),
+	"kross JDT extension returned the wrong Kotlin source: " .. tostring(source_result.result.uri)
+)
+assertf(
+	source_result.result.range.start.line == 3,
+	"kross JDT extension did not resolve the Kotlin member declaration: " .. vim.inspect(source_result.result.range)
+)
+
+local top_level_result = client:request_sync("workspace/executeCommand", {
+	command = "kotlin.java.resolveKotlinSource",
+	arguments = {
+		{
+			textDocumentUri = vim.uri_from_bufnr(bufnr),
+			position = { line = 8, character = 30 },
+		},
+	},
+}, 10000, bufnr)
+assertf(
+	top_level_result and not top_level_result.err and top_level_result.result,
+	"kross JDT extension did not resolve a top-level Kotlin function: " .. vim.inspect(top_level_result)
+)
+assertf(
+	tostring(top_level_result.result.uri):match("Functions%.kt$"),
+	"kross JDT extension ignored the class SourceFile attribute: " .. tostring(top_level_result.result.uri)
+)
+
+kross.definition({
 	on_list = function(list)
 		definition_list = list
 	end,
 })
-wait_for("kross gd fallback did not resolve KotlinThing to Kotlin source", 90000, function()
+wait_for("kross gd fallback did not use the JDT extension Kotlin source result", 90000, function()
 	if not definition_list then
 		return false
 	end
@@ -237,6 +286,22 @@ wait_for("kross gd fallback did not resolve KotlinThing to Kotlin source", 90000
 	end
 	return false
 end)
+
+local references_list
+vim.lsp.buf.references({ includeDeclaration = true }, {
+	on_list = function(list)
+		references_list = list
+	end,
+})
+wait_for("JDT LS references did not return a list", 90000, function()
+	return references_list and references_list.items and #references_list.items > 0
+end)
+for _, item in ipairs(references_list.items or {}) do
+	assertf(
+		not tostring(item.filename or item.text):find("build/classes/kotlin/main", 1, true),
+		"JDT LS references leaked compiled Kotlin output: " .. tostring(item.filename or item.text)
+	)
+end
 
 client:stop(true)
 print("kross live jdtls check ok: " .. root)
