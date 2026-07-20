@@ -229,6 +229,7 @@ wait_for("Java diagnostics still report KotlinThing as unresolved", 90000, funct
 end)
 
 local definition_list
+local kotlin_source = vim.fs.normalize(root .. "/src/main/kotlin/demo/KotlinThing.kt")
 vim.api.nvim_win_set_cursor(0, { 5, 35 })
 local source_result = client:request_sync("workspace/executeCommand", {
 	command = "kotlin.java.resolveKotlinSource",
@@ -246,6 +247,15 @@ assertf(
 assertf(
 	tostring(source_result.result.uri):match("KotlinThing%.kt$"),
 	"kross JDT extension returned the wrong Kotlin source: " .. tostring(source_result.result.uri)
+)
+assertf(
+	tostring(source_result.result.uri):match("^file:"),
+	"kross JDT extension returned a virtual Kotlin source: " .. tostring(source_result.result.uri)
+)
+assertf(
+	vim.fs.normalize(vim.uri_to_fname(source_result.result.uri))
+		== kotlin_source,
+	"kross JDT extension did not return the project Kotlin file: " .. tostring(source_result.result.uri)
 )
 assertf(
 	source_result.result.range.start.line == 3,
@@ -269,6 +279,15 @@ assertf(
 	tostring(top_level_result.result.uri):match("Functions%.kt$"),
 	"kross JDT extension ignored the class SourceFile attribute: " .. tostring(top_level_result.result.uri)
 )
+assertf(
+	tostring(top_level_result.result.uri):match("^file:"),
+	"kross JDT extension returned a virtual top-level Kotlin source: " .. tostring(top_level_result.result.uri)
+)
+assertf(
+	vim.fs.normalize(vim.uri_to_fname(top_level_result.result.uri))
+		== vim.fs.normalize(root .. "/src/main/kotlin/demo/Functions.kt"),
+	"kross JDT extension did not return the top-level function source file: " .. tostring(top_level_result.result.uri)
+)
 
 kross.definition({
 	on_list = function(list)
@@ -286,6 +305,18 @@ wait_for("kross gd fallback did not use the JDT extension Kotlin source result",
 	end
 	return false
 end)
+
+vim.cmd("edit " .. vim.fn.fnameescape(kotlin_source))
+local kotlin_bufnr = vim.api.nvim_get_current_buf()
+vim.api.nvim_set_current_buf(bufnr)
+vim.api.nvim_win_set_cursor(0, { 5, 35 })
+kross.definition()
+wait_for("kross gd did not reuse the existing Kotlin source buffer", 90000, function()
+	return vim.api.nvim_get_current_buf() == kotlin_bufnr
+end)
+assertf(vim.bo[kotlin_bufnr].modifiable, "kross gd opened a non-modifiable Kotlin buffer")
+assertf(vim.bo[kotlin_bufnr].buftype == "", "kross gd opened a virtual Kotlin buffer")
+vim.api.nvim_set_current_buf(bufnr)
 
 local references_list
 vim.lsp.buf.references({ includeDeclaration = true }, {

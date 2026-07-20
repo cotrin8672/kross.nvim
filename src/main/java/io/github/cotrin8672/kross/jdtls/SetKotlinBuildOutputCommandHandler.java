@@ -32,6 +32,7 @@ import org.eclipse.jdt.core.IClasspathAttribute;
 import org.eclipse.jdt.core.IClasspathEntry;
 import org.eclipse.jdt.core.IJavaElement;
 import org.eclipse.jdt.core.IJavaProject;
+import org.eclipse.jdt.core.IPackageFragmentRoot;
 import org.eclipse.jdt.core.IType;
 import org.eclipse.jdt.core.ITypeRoot;
 import org.eclipse.jdt.core.JavaCore;
@@ -43,7 +44,6 @@ import org.eclipse.jdt.ls.core.internal.IDelegateCommandHandler;
 import org.eclipse.jdt.ls.core.internal.JDTUtils;
 import org.eclipse.jdt.ls.core.internal.JavaLanguageServerPlugin;
 import org.eclipse.jdt.ls.core.internal.ProjectUtils;
-import org.eclipse.jdt.ls.core.internal.handlers.JdtSourceLookUpProvider;
 import org.eclipse.jdt.ls.core.internal.managers.GradleBuildSupport;
 import org.eclipse.jdt.ls.core.internal.managers.IBuildSupport;
 import org.eclipse.jdt.ls.core.internal.managers.MavenBuildSupport;
@@ -133,11 +133,7 @@ public final class SetKotlinBuildOutputCommandHandler implements IDelegateComman
         }
 
         IJavaProject javaProject = unit.getJavaProject();
-        String fullyQualifiedName = sourceType.getFullyQualifiedName('.');
-        String sourceUri = new JdtSourceLookUpProvider().getSourceFileURI(
-                fullyQualifiedName,
-                kotlinSourcePath(sourceType),
-                List.of(javaProject.getProject().getName()));
+        String sourceUri = kotlinSourceUri(sourceType);
         if (sourceUri == null) {
             return null;
         }
@@ -167,6 +163,25 @@ public final class SetKotlinBuildOutputCommandHandler implements IDelegateComman
             type = type.getDeclaringType();
         }
         return type;
+    }
+
+    private static String kotlinSourceUri(IType type) throws CoreException {
+        IPackageFragmentRoot fragmentRoot = (IPackageFragmentRoot) type.getAncestor(IJavaElement.PACKAGE_FRAGMENT_ROOT);
+        if (fragmentRoot == null) {
+            return null;
+        }
+
+        IPath attachment = fragmentRoot.getRawClasspathEntry().getSourceAttachmentPath();
+        if (attachment == null) {
+            return null;
+        }
+
+        var resource = ResourcesPlugin.getWorkspace().getRoot().findMember(attachment);
+        Path sourceRoot = resource != null && resource.getLocation() != null
+                ? resource.getLocation().toFile().toPath()
+                : attachment.toFile().toPath();
+        Path source = sourceRoot.resolve(kotlinSourcePath(type)).toAbsolutePath().normalize();
+        return Files.isRegularFile(source) ? source.toUri().toString() : null;
     }
 
     private static String kotlinSourcePath(IType type) throws CoreException {
