@@ -54,7 +54,16 @@ write(root .. "/src/main/kotlin/demo/KotlinThing.kt", {
 	"package demo",
 	"",
 	"class KotlinThing {",
+	'    val ENCHANTABLE_MECHANICAL_DRILL: String = "drill"',
 	'    fun message(): String = "ok"',
+	"}",
+})
+write(root .. "/src/main/kotlin/demo/BlockRegistration.kt", {
+	"package demo",
+	"",
+	"object BlockRegistration {",
+	"    @JvmStatic",
+	'    val ENCHANTABLE_MECHANICAL_DRILL: String = "drill"',
 	"}",
 })
 write(root .. "/src/main/kotlin/demo/Functions.kt", {
@@ -68,6 +77,14 @@ write(root .. "/src/main/java/demo/UseKotlin.java", {
 	"public class UseKotlin {",
 	"    public String call() {",
 	"        return new KotlinThing().message();",
+	"    }",
+	"",
+	"    public String propertyCall() {",
+	"        return new KotlinThing().getENCHANTABLE_MECHANICAL_DRILL();",
+	"    }",
+	"",
+	"    public String objectPropertyCall() {",
+	"        return BlockRegistration.getENCHANTABLE_MECHANICAL_DRILL();",
 	"    }",
 	"",
 	"    public String topLevelCall() {",
@@ -258,8 +275,75 @@ assertf(
 	"kross JDT extension did not return the project Kotlin file: " .. tostring(source_result.result.uri)
 )
 assertf(
-	source_result.result.range.start.line == 3,
+	source_result.result.range.start.line == 4,
 	"kross JDT extension did not resolve the Kotlin member declaration: " .. vim.inspect(source_result.result.range)
+)
+
+local property_result = client:request_sync("workspace/executeCommand", {
+	command = "kotlin.java.resolveKotlinSource",
+	arguments = {
+		{
+			textDocumentUri = vim.uri_from_bufnr(bufnr),
+			position = { line = 8, character = 45 },
+		},
+	},
+}, 10000, bufnr)
+assertf(
+	property_result and not property_result.err and property_result.result,
+	"kross JDT extension did not resolve a Kotlin property getter: " .. vim.inspect(property_result)
+)
+assertf(
+	tostring(property_result.result.uri):match("KotlinThing%.kt$"),
+	"kross JDT extension returned the wrong Kotlin property source: " .. tostring(property_result.result.uri)
+)
+assertf(
+	property_result.result.range.start.line == 3,
+	"kross JDT extension did not resolve the Kotlin property declaration: " .. vim.inspect(property_result.result.range)
+)
+
+local object_result = client:request_sync("workspace/executeCommand", {
+	command = "kotlin.java.resolveKotlinSource",
+	arguments = {
+		{
+			textDocumentUri = vim.uri_from_bufnr(bufnr),
+			position = { line = 12, character = 16 },
+		},
+	},
+}, 10000, bufnr)
+assertf(
+	object_result and not object_result.err and object_result.result,
+	"kross JDT extension did not resolve a Kotlin object: " .. vim.inspect(object_result)
+)
+assertf(
+	tostring(object_result.result.uri):match("BlockRegistration%.kt$"),
+	"kross JDT extension returned the wrong Kotlin object source: " .. tostring(object_result.result.uri)
+)
+assertf(
+	object_result.result.range.start.line == 2,
+	"kross JDT extension did not resolve the Kotlin object declaration: " .. vim.inspect(object_result.result.range)
+)
+
+local object_property_result = client:request_sync("workspace/executeCommand", {
+	command = "kotlin.java.resolveKotlinSource",
+	arguments = {
+		{
+			textDocumentUri = vim.uri_from_bufnr(bufnr),
+			position = { line = 12, character = 44 },
+		},
+	},
+}, 10000, bufnr)
+assertf(
+	object_property_result and not object_property_result.err and object_property_result.result,
+	"kross JDT extension did not resolve a Kotlin object property getter: " .. vim.inspect(object_property_result)
+)
+assertf(
+	tostring(object_property_result.result.uri):match("BlockRegistration%.kt$"),
+	"kross JDT extension returned the wrong Kotlin object property source: " .. tostring(object_property_result.result.uri)
+)
+assertf(
+	object_property_result.result.range.start.line == 4,
+	"kross JDT extension did not resolve the Kotlin object property declaration: "
+		.. vim.inspect(object_property_result.result.range)
 )
 
 local top_level_result = client:request_sync("workspace/executeCommand", {
@@ -267,7 +351,7 @@ local top_level_result = client:request_sync("workspace/executeCommand", {
 	arguments = {
 		{
 			textDocumentUri = vim.uri_from_bufnr(bufnr),
-			position = { line = 8, character = 30 },
+			position = { line = 16, character = 30 },
 		},
 	},
 }, 10000, bufnr)
@@ -319,18 +403,22 @@ assertf(vim.bo[kotlin_bufnr].buftype == "", "kross gd opened a virtual Kotlin bu
 vim.api.nvim_set_current_buf(bufnr)
 
 local references_list
-vim.lsp.buf.references({ includeDeclaration = true }, {
+kross.references({
 	on_list = function(list)
 		references_list = list
 	end,
 })
-wait_for("JDT LS references did not return a list", 90000, function()
+wait_for("kross references did not return a list", 90000, function()
 	return references_list and references_list.items and #references_list.items > 0
 end)
 for _, item in ipairs(references_list.items or {}) do
 	assertf(
+		tostring(item.filename or item.text):match("^%a:") or tostring(item.filename or item.text):match("^/"),
+		"kross references returned a virtual location: " .. tostring(item.filename or item.text)
+	)
+	assertf(
 		not tostring(item.filename or item.text):find("build/classes/kotlin/main", 1, true),
-		"JDT LS references leaked compiled Kotlin output: " .. tostring(item.filename or item.text)
+		"kross references leaked compiled Kotlin output: " .. tostring(item.filename or item.text)
 	)
 end
 

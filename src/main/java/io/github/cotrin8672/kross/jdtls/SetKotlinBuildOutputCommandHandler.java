@@ -15,6 +15,7 @@ import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -138,7 +139,8 @@ public final class SetKotlinBuildOutputCommandHandler implements IDelegateComman
             return null;
         }
 
-        return new Location(sourceUri, declarationRange(sourceUri, element.getElementName()));
+        Range range = declarationRange(sourceUri, element.getElementName());
+        return range == null ? null : new Location(sourceUri, range);
     }
 
     private static String stringValue(Object value) {
@@ -210,26 +212,50 @@ public final class SetKotlinBuildOutputCommandHandler implements IDelegateComman
         try {
             Path path = Path.of(URI.create(sourceUri));
             if (!Files.isRegularFile(path)) {
-                return startRange();
+                return null;
             }
             List<String> lines = Files.readAllLines(path);
+            Set<String> candidates = kotlinDeclarationNames(symbol);
             for (int lineIndex = 0; lineIndex < lines.size(); lineIndex++) {
                 String line = lines.get(lineIndex);
-                int column = line.indexOf(symbol);
-                if (column >= 0 && line.substring(0, column).matches(".*\\b(class|interface|object|fun|val|var)\\s+")) {
-                    Position start = new Position(lineIndex, column);
-                    return new Range(start, new Position(lineIndex, column + symbol.length()));
+                for (String candidate : candidates) {
+                    int column = line.indexOf(candidate);
+                    if (column >= 0 && line.substring(0, column).matches(".*\\b(class|interface|object|fun|val|var)\\s+")) {
+                        Position start = new Position(lineIndex, column);
+                        return new Range(start, new Position(lineIndex, column + candidate.length()));
+                    }
                 }
             }
         } catch (Exception ex) {
             JavaLanguageServerPlugin.logException("Failed to compute Kotlin source range", ex);
         }
-        return startRange();
+        return null;
     }
 
-    private static Range startRange() {
-        Position start = new Position(0, 0);
-        return new Range(start, start);
+    private static Set<String> kotlinDeclarationNames(String jvmName) {
+        Set<String> names = new LinkedHashSet<>();
+        if (jvmName == null || jvmName.isEmpty()) {
+            return names;
+        }
+
+        names.add(jvmName);
+        if (jvmName.startsWith("get") && jvmName.length() > 3) {
+            addPropertyNames(names, jvmName.substring(3));
+        } else if (jvmName.startsWith("set") && jvmName.length() > 3) {
+            addPropertyNames(names, jvmName.substring(3));
+        } else if (jvmName.startsWith("is") && jvmName.length() > 2) {
+            addPropertyNames(names, jvmName.substring(2));
+        }
+        return names;
+    }
+
+    private static void addPropertyNames(Set<String> names, String suffix) {
+        names.add(suffix);
+        if (suffix.length() > 1) {
+            names.add(Character.toLowerCase(suffix.charAt(0)) + suffix.substring(1));
+        } else if (!suffix.isEmpty()) {
+            names.add(suffix.toLowerCase());
+        }
     }
 
     private static void setClasspathEntry(IProject project, Path outputPath, IProgressMonitor monitor, IBuildSupport buildSupport)

@@ -117,6 +117,28 @@ assert(requests[1].method == "workspace/executeCommand", "build success reattach
 assert(requests[1].params.command == "kotlin.java.setKotlinBuildOutput", "attach uses kross JDT LS command")
 assert(requests[1].params.arguments[1] == root .. "/build/classes/kotlin/main", "attach passes Kotlin output")
 
+local queued_jobs = {}
+requests = {}
+vim.fn.jobstart = function(args, opts)
+	table.insert(queued_jobs, { args = args, cwd = opts.cwd, opts = opts })
+	return #queued_jobs
+end
+kross.build(root)
+kross.build(root)
+assert(#queued_jobs == 1, "running build coalesces saves")
+queued_jobs[1].opts.on_exit(1, 0)
+vim.wait(1000, function()
+	return #queued_jobs == 2
+end)
+assert(#queued_jobs == 2, "pending save reruns build after the current build")
+queued_jobs[2].opts.on_exit(2, 0)
+
+vim.fn.jobstart = function(args, opts)
+	started = { args = args, cwd = opts.cwd }
+	opts.on_exit(1, 0)
+	return 1
+end
+
 requests = {}
 vim.fn.writefile({
 	[[<?xml version="1.0" encoding="UTF-8"?>]],
@@ -164,9 +186,11 @@ vim.wait(1000, function()
 	return map and map.desc == "kross Kotlin definition"
 end)
 assert(vim.fn.maparg("gd", "n", false, true).desc == "kross Kotlin definition", "kross remaps gd after jdtls attach")
+assert(vim.fn.maparg("grr", "n", false, true).desc == "kross Kotlin references", "kross remaps grr after jdtls attach")
 
 local original_buf_request_all = vim.lsp.buf_request_all
 local definition_list
+local references_list
 local resolve_request
 local standard_requested = false
 vim.lsp.get_clients = function(opts)
@@ -225,6 +249,123 @@ vim.wait(1000, function()
 	return definition_list ~= nil
 end)
 assert(standard_requested, "missing Kotlin source falls back to the standard definition")
+
+vim.lsp.buf_request_all = function(_, method, _, callback)
+	assert(method == "textDocument/references", "kross references uses the standard JDT LS references request")
+	callback({
+		[1] = {
+			result = {
+				{
+					uri = vim.uri_from_fname(kotlin_file),
+					range = { start = { line = 1, character = 6 }, ["end"] = { line = 1, character = 9 } },
+				},
+				{
+					uri = "jdt://contents/demo/KotlinThing.class?=sample",
+					range = { start = { line = 1, character = 6 }, ["end"] = { line = 1, character = 9 } },
+				},
+			},
+		},
+	})
+end
+kross.references({
+	on_list = function(list)
+		references_list = list
+	end,
+})
+vim.wait(1000, function()
+	return references_list ~= nil
+end)
+assert(#references_list.items == 1, "kross references filters compiled JDT locations")
+assert(vim.fs.normalize(references_list.items[1].filename) == vim.fs.normalize(kotlin_file), "kross references keeps real files")
+
+local kotlin_client_request
+local rename_request
+local edit_applied
+local kotlin_client = {
+	name = "kotlin_lsp",
+	offset_encoding = "utf-16",
+	config = { root_dir = root:gsub("^([A-Z]):", function(drive)
+		return drive:lower() .. ":"
+	end) },
+	request = function(_, method, params, callback)
+		if method == "textDocument/references" then
+			kotlin_client_request = { method = method, params = params }
+			callback(nil, {
+				{
+					uri = vim.uri_from_fname(kotlin_file),
+					range = { start = { line = 3, character = 8 }, ["end"] = { line = 3, character = 15 } },
+				},
+			})
+		elseif method == "textDocument/rename" then
+			rename_request = { method = method, params = params }
+			callback(nil, { changes = {} })
+		else
+			callback(nil, { placeholder = "message" })
+		end
+	end,
+}
+vim.lsp.get_clients = function(opts)
+	if opts and opts.name == "jdtls" then
+		return { client }
+	end
+	if opts and opts.name == "kotlin_lsp" then
+		return { kotlin_client }
+	end
+	return {}
+end
+client.request = function(_, method, params, callback)
+	resolve_request = { method = method, params = params }
+	callback(nil, {
+		uri = vim.uri_from_fname(kotlin_file),
+		range = { start = { line = 3, character = 8 }, ["end"] = { line = 3, character = 15 } },
+	})
+end
+vim.lsp.buf_request_all = function()
+	error("kross should use kotlin_lsp for translated references")
+end
+references_list = nil
+kross.references({
+	on_list = function(list)
+		references_list = list
+	end,
+})
+vim.wait(1000, function()
+	return references_list ~= nil
+end)
+assert(kotlin_client_request, "kross references delegates translated Kotlin source to kotlin_lsp")
+assert(kotlin_client_request.params.textDocument.uri == vim.uri_from_fname(kotlin_file), "kotlin_lsp references uses Kotlin source URI")
+assert(kotlin_client_request.params.position.line == 3, "kotlin_lsp references uses Kotlin source position")
+
+local original_apply_workspace_edit = vim.lsp.util.apply_workspace_edit
+vim.lsp.util.apply_workspace_edit = function(edit, encoding)
+	edit_applied = { edit = edit, encoding = encoding }
+end
+kross.rename("renamedMessage")
+vim.wait(1000, function()
+	return edit_applied ~= nil
+end)
+assert(rename_request, "kross rename delegates translated Kotlin source to kotlin_lsp")
+assert(rename_request.params.newName == "renamedMessage", "kross rename passes the requested name")
+assert(rename_request.params.position.line == 3, "kross rename uses Kotlin source position")
+assert(edit_applied.encoding == "utf-16", "kross rename applies edits with kotlin_lsp encoding")
+
+local fallback_called
+vim.lsp.get_clients = function(opts)
+	if opts and opts.name == "jdtls" then
+		return { client }
+	end
+	return {}
+end
+kross.rename("fallbackName", {
+	fallback = function(name)
+		fallback_called = name
+	end,
+})
+vim.wait(1000, function()
+	return fallback_called ~= nil
+end)
+assert(fallback_called == "fallbackName", "kross rename falls back when kotlin_lsp is unavailable")
+vim.lsp.util.apply_workspace_edit = original_apply_workspace_edit
 vim.lsp.buf_request_all = original_buf_request_all
 
 vim.lsp.get_clients = original_get_clients

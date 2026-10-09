@@ -15,6 +15,7 @@ local state = {
 	roots = {},
 	timers = {},
 	running = {},
+	pending = {},
 	attach_retries = {},
 }
 
@@ -28,7 +29,13 @@ local function notify(message, level)
 end
 
 local function root_key(root)
-	return vim.fs.normalize(root)
+	local normalized = vim.fs.normalize(root)
+	if vim.fn.has("win32") == 1 then
+		normalized = normalized:gsub("^([a-zA-Z]):", function(drive)
+			return drive:upper() .. ":"
+		end)
+	end
+	return normalized
 end
 
 local function output_dir(root)
@@ -196,11 +203,13 @@ end
 
 local function show_locations(locations, client, opts)
 	opts = opts or {}
+	local title = opts.title or "LSP locations"
+	local method = opts.method or "textDocument/definition"
 	if opts.on_list then
 		opts.on_list({
-			title = "LSP locations",
+			title = title,
 			items = vim.lsp.util.locations_to_items(locations, client.offset_encoding),
-			context = { bufnr = vim.api.nvim_get_current_buf(), method = "textDocument/definition" },
+			context = { bufnr = vim.api.nvim_get_current_buf(), method = method },
 		})
 		return
 	end
@@ -211,9 +220,9 @@ local function show_locations(locations, client, opts)
 	end
 
 	local list = {
-		title = "LSP locations",
+		title = title,
 		items = vim.lsp.util.locations_to_items(locations, client.offset_encoding),
-		context = { bufnr = vim.api.nvim_get_current_buf(), method = "textDocument/definition" },
+		context = { bufnr = vim.api.nvim_get_current_buf(), method = method },
 	}
 	if opts.loclist then
 		vim.fn.setloclist(0, {}, " ", list)
@@ -234,6 +243,47 @@ local function definition_locations(result)
 	return vim.islist(result) and result or {}
 end
 
+local function file_locations(locations)
+	return vim.tbl_filter(function(location)
+		local uri = location.uri or location.targetUri
+		if not uri or not uri:match("^file:") then
+			return false
+		end
+		local path = vim.uri_to_fname(uri)
+		return not path:match("%.class$")
+	end, locations)
+end
+
+local function client_root(client)
+	local root = client and client.config and client.config.root_dir
+	if not root and client and client.workspace_folders and client.workspace_folders[1] then
+		root = client.workspace_folders[1].name
+	end
+	return root and root_key(root) or nil
+end
+
+local function kotlin_client(root, method)
+	for _, client in ipairs(vim.lsp.get_clients({ name = "kotlin_lsp", method = method })) do
+		if client_root(client) == root then
+			return client
+		end
+	end
+	return nil
+end
+
+local function resolve_kotlin_source(client, bufnr, win, callback)
+	local position_params = vim.lsp.util.make_position_params(win, client.offset_encoding)
+	client:request("workspace/executeCommand", {
+		command = "kotlin.java.resolveKotlinSource",
+		arguments = {
+			{
+				textDocumentUri = position_params.textDocument.uri,
+				position = position_params.position,
+			},
+		},
+	}, callback, bufnr)
+end
+
 function M.definition(opts)
 	opts = opts or {}
 	local bufnr = vim.api.nvim_get_current_buf()
@@ -244,7 +294,6 @@ function M.definition(opts)
 	end
 
 	local first_client = clients[1]
-	local position_params = vim.lsp.util.make_position_params(win, first_client.offset_encoding)
 	local function standard_definition()
 		vim.lsp.buf_request_all(bufnr, "textDocument/definition", function(client)
 			return vim.lsp.util.make_position_params(win, client.offset_encoding)
@@ -263,21 +312,144 @@ function M.definition(opts)
 		end)
 	end
 
-	first_client:request("workspace/executeCommand", {
-		command = "kotlin.java.resolveKotlinSource",
-		arguments = {
-			{
-				textDocumentUri = position_params.textDocument.uri,
-				position = position_params.position,
-			},
-		},
-	}, function(err, location)
+	resolve_kotlin_source(first_client, bufnr, win, function(err, location)
 		if err or not location then
 			standard_definition()
 			return
 		end
 		show_locations({ location }, first_client, opts)
-	end, bufnr)
+	end)
+end
+
+function M.references(opts)
+	opts = opts or {}
+	local bufnr = vim.api.nvim_get_current_buf()
+	local win = vim.api.nvim_get_current_win()
+	local clients = vim.lsp.get_clients({ bufnr = bufnr, name = "jdtls", method = "textDocument/references" })
+	if not next(clients) then
+		return vim.lsp.buf.references(opts)
+	end
+
+	local first_client = clients[1]
+	local function standard_references()
+		vim.lsp.buf_request_all(bufnr, "textDocument/references", function(client)
+			local params = vim.lsp.util.make_position_params(win, client.offset_encoding)
+			params.context = { includeDeclaration = true }
+			return params
+		end, function(results)
+			local locations = {}
+			local response_client = first_client
+			for client_id, response in pairs(results) do
+				response_client = vim.lsp.get_client_by_id(client_id) or response_client
+				vim.list_extend(locations, definition_locations(response and response.result))
+			end
+			locations = file_locations(locations)
+			if not next(locations) then
+				vim.notify("No locations found", vim.log.levels.INFO)
+				return
+			end
+			opts.title = opts.title or "LSP references"
+			opts.method = "textDocument/references"
+			show_locations(locations, response_client, opts)
+		end)
+	end
+
+	resolve_kotlin_source(first_client, bufnr, win, function(err, location)
+		local root = client_root(first_client)
+		local client = root and kotlin_client(root, "textDocument/references") or nil
+		if err or not location or not client then
+			standard_references()
+			return
+		end
+		client:request("textDocument/references", {
+			textDocument = { uri = location.uri },
+			position = location.range.start,
+			context = { includeDeclaration = true },
+		}, function(reference_err, result)
+			local locations = not reference_err and file_locations(definition_locations(result)) or {}
+			if not next(locations) then
+				standard_references()
+				return
+			end
+			opts.title = opts.title or "LSP references"
+			opts.method = "textDocument/references"
+			show_locations(locations, client, opts)
+		end)
+	end)
+end
+
+local function range_text(location)
+	local ok, path = pcall(vim.uri_to_fname, location.uri)
+	if not ok or not path or vim.fn.filereadable(path) ~= 1 then
+		return nil
+	end
+	local line = vim.fn.readfile(path, "", location.range.start.line + 1)[location.range.start.line + 1]
+	if not line then
+		return nil
+	end
+	return line:sub(location.range.start.character + 1, location.range["end"].character)
+end
+
+function M.rename(new_name, opts)
+	opts = opts or {}
+	local function fallback()
+		if opts.fallback then
+			return opts.fallback(new_name, opts)
+		end
+		return vim.lsp.buf.rename(new_name, opts)
+	end
+
+	local bufnr = vim.api.nvim_get_current_buf()
+	local win = vim.api.nvim_get_current_win()
+	local clients = vim.lsp.get_clients({ bufnr = bufnr, name = "jdtls", method = "textDocument/rename" })
+	if not next(clients) then
+		return fallback()
+	end
+
+	local first_client = clients[1]
+	resolve_kotlin_source(first_client, bufnr, win, function(err, location)
+		local root = client_root(first_client)
+		local client = root and kotlin_client(root, "textDocument/rename") or nil
+		if err or not location or not client then
+			fallback()
+			return
+		end
+
+		local function request_rename(name)
+			if not name or name == "" then
+				return
+			end
+			client:request("textDocument/rename", {
+				textDocument = { uri = location.uri },
+				position = location.range.start,
+				newName = name,
+			}, function(rename_err, edit)
+				if rename_err then
+					fallback()
+					return
+				end
+				if edit then
+					vim.lsp.util.apply_workspace_edit(edit, client.offset_encoding)
+				end
+			end)
+		end
+
+		if new_name then
+			request_rename(new_name)
+			return
+		end
+
+		local default = range_text(location) or vim.fn.expand("<cword>")
+		client:request("textDocument/prepareRename", {
+			textDocument = { uri = location.uri },
+			position = location.range.start,
+		}, function(_, result)
+			if type(result) == "table" and result.placeholder then
+				default = result.placeholder
+			end
+			vim.ui.input({ prompt = "New Name: ", default = default }, request_rename)
+		end)
+	end)
 end
 
 local function map_navigation(bufnr, client)
@@ -290,10 +462,10 @@ local function map_navigation(bufnr, client)
 			return M.definition()
 		end, { buffer = bufnr, silent = true, desc = "kross Kotlin definition" })
 		vim.keymap.set("n", "gr", function()
-			return vim.lsp.buf.references()
+			return M.references()
 		end, { buffer = bufnr, silent = true, desc = "kross Kotlin references" })
 		vim.keymap.set("n", "grr", function()
-			return vim.lsp.buf.references()
+			return M.references()
 		end, { buffer = bufnr, silent = true, desc = "kross Kotlin references" })
 	end)
 end
@@ -327,6 +499,7 @@ function M.build(root)
 
 	root = root_key(root)
 	if state.running[root] then
+		state.pending[root] = true
 		return
 	end
 
@@ -347,6 +520,10 @@ function M.build(root)
 					notify("kross: build finished")
 				else
 					vim.notify("kross: build failed with exit code " .. code, vim.log.levels.ERROR)
+				end
+				if state.pending[root] then
+					state.pending[root] = nil
+					M.build(root)
 				end
 			end)
 		end,
